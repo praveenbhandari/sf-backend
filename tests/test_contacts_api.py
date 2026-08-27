@@ -381,3 +381,33 @@ def test_is_duplicate_column_uses_postgres_sqlstate_not_generic_already_exists()
     assert not _is_duplicate_column(Wrapped(SimpleNamespace(sqlstate="42P07", pgcode="42P07")))
     assert _is_duplicate_column(Wrapped(Exception("duplicate column name: photo")))
     assert not _is_duplicate_column(Wrapped(Exception('relation "contacts" already exists')))
+
+
+def test_vcard_missing_contact_returns_404(client):
+    assert client.get(f"{BASE}/9999/vcard").status_code == 404
+
+
+def test_vcard_contains_name_email_and_work_address(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.get(f"{BASE}/{contact_id}/vcard")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/vcard")
+    assert "charset=utf-8" in response.headers["content-type"]
+    assert response.headers["content-disposition"] == 'attachment; filename="ada-lovelace.vcf"'
+
+    body = response.text
+    assert "BEGIN:VCARD" in body
+    assert "VERSION:3.0" in body
+    assert "FN:Ada Lovelace" in body
+    assert "EMAIL:ada@example.com" in body
+    assert "ADR;TYPE=WORK:;;1 Market St;San Francisco;CA;94105;USA" in body
+    assert body.strip().endswith("END:VCARD")
+
+
+def test_vcard_includes_photo_when_contact_has_png(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": TINY_PNG}).json()["id"]
+    body = client.get(f"{BASE}/{contact_id}/vcard").text
+
+    assert "PHOTO;ENCODING=b;TYPE=PNG:" in body
+    assert "iVBORw0KGgo" in body

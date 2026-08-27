@@ -4,6 +4,7 @@ import pytest
 
 CONTACTS_PATH = "/api/v1/contacts"
 ITEM_PATH = f"{CONTACTS_PATH}/{{contact_id}}"
+VCARD_PATH = f"{ITEM_PATH}/vcard"
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 
 
@@ -68,6 +69,7 @@ def test_operation_ids_are_stable_and_unique(spec):
         "replaceContact",
         "updateContact",
         "deleteContact",
+        "downloadContactVcard",
         "healthCheck",
         "getRoot",
     }
@@ -76,6 +78,7 @@ def test_operation_ids_are_stable_and_unique(spec):
 def test_all_endpoints_are_present(spec):
     assert set(spec["paths"][CONTACTS_PATH]) == {"get", "post"}
     assert set(spec["paths"][ITEM_PATH]) == {"get", "put", "patch", "delete"}
+    assert set(spec["paths"][VCARD_PATH]) == {"get"}
     assert "/health" in spec["paths"]
 
 
@@ -84,6 +87,8 @@ def test_all_endpoints_are_present(spec):
     [
         (CONTACTS_PATH, "post", "409"),
         (ITEM_PATH, "get", "404"),
+        (VCARD_PATH, "get", "200"),
+        (VCARD_PATH, "get", "404"),
         (ITEM_PATH, "put", "404"),
         (ITEM_PATH, "put", "409"),
         (ITEM_PATH, "patch", "404"),
@@ -123,6 +128,14 @@ def test_path_parameter_is_described(spec):
     param = spec["paths"][ITEM_PATH]["get"]["parameters"][0]
     assert param["name"] == "contact_id"
     assert param["description"]
+
+
+def test_vcard_download_is_documented(spec):
+    operation = spec["paths"][VCARD_PATH]["get"]
+    assert operation["operationId"] == "downloadContactVcard"
+    assert "vCard" in operation["summary"]
+    assert "text/vcard" in operation["responses"]["200"]["content"]
+    assert operation["responses"]["404"]["description"]
 
 
 def test_contact_fields_are_described_and_have_examples(spec):

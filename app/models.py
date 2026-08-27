@@ -29,6 +29,9 @@ class Contact(Base):
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country: Mapped[str | None] = mapped_column(String(120))
 
+    # base64 data URL; Text because an image runs past any sane String cap.
+    photo: Mapped[str | None] = mapped_column(Text)
+
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

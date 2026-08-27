@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -50,6 +50,27 @@ def init_db() -> None:
     from app import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """
+    Add columns that `create_all` cannot: it creates missing tables but never
+    alters existing ones, so a database written by an older version would be
+    missing newly mapped columns. This project ships no migration tool, so
+    reconcile the additive case here and let anything else surface loudly.
+    """
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing or not column.nullable:
+                    continue
+                type_sql = column.type.compile(engine.dialect)
+                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {type_sql}'))
 
 
 def get_db() -> Generator[Session, None, None]:

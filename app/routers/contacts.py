@@ -12,6 +12,7 @@ from app.schemas import (
     ContactUpdate,
     ErrorResponse,
 )
+from app.vcard import build_vcard, filename_slug
 
 router = APIRouter(prefix="/api/v1/contacts", tags=["contacts"])
 
@@ -119,6 +120,37 @@ def list_contacts(
 def get_contact(contact_id: int = CONTACT_ID, db: Session = Depends(get_db)) -> Contact:
     """Fetch a single contact by its id."""
     return _get_or_404(db, contact_id)
+
+
+@router.get(
+    "/{contact_id}/vcard",
+    operation_id="downloadContactVcard",
+    summary="Download a contact as vCard",
+    response_class=Response,
+    response_description="RFC 2426 vCard 3.0 file for import into address books.",
+    responses={
+        status.HTTP_200_OK: {
+            "description": "vCard 3.0 file named from the contact's full name.",
+            "content": {"text/vcard": {"schema": {"type": "string"}}},
+        },
+        status.HTTP_404_NOT_FOUND: NOT_FOUND,
+    },
+)
+def download_contact_vcard(contact_id: int = CONTACT_ID, db: Session = Depends(get_db)) -> Response:
+    """
+    Export a single contact as a vCard 3.0 (`.vcf`) attachment.
+
+    The file includes the formatted name, structured name, email, and any
+    phone, organisation, title, notes, typed postal addresses, and photo.
+    A missing id returns `404` rather than an empty card.
+    """
+    contact = _get_or_404(db, contact_id)
+    slug = filename_slug(contact.full_name)
+    return Response(
+        content=build_vcard(contact),
+        media_type="text/vcard",
+        headers={"Content-Disposition": f'attachment; filename="{slug}.vcf"'},
+    )
 
 
 @router.put(

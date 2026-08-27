@@ -26,6 +26,8 @@ def test_create_contact(client, payload):
     assert body["email"] == "ada@example.com"
     assert body["full_name"] == "Ada Lovelace"
     assert body["created_at"] and body["updated_at"]
+    assert body["addresses"][0]["type"] == "Work"
+    assert body["addresses"][0]["id"] > 0
 
 
 def test_create_requires_valid_email(client, payload):
@@ -110,6 +112,67 @@ def test_patch_updates_only_sent_fields(client, payload):
     assert body["company"] == "Analytical Engines"
 
 
+def test_contact_supports_multiple_typed_addresses(client, payload):
+    addresses = [
+        {
+            "type": "Home",
+            "address": "12 Home St",
+            "city": "London",
+            "country": "UK",
+        },
+        {
+            "type": "Work",
+            "address": "1 Market St",
+            "city": "San Francisco",
+            "state": "CA",
+            "postal_code": "94105",
+            "country": "USA",
+        },
+        {"type": "Other", "address": "PO Box 42"},
+    ]
+
+    body = client.post(BASE, json={**payload, "addresses": addresses}).json()
+
+    assert [item["type"] for item in body["addresses"]] == ["Home", "Work", "Other"]
+    assert len({item["id"] for item in body["addresses"]}) == 3
+
+
+def test_patch_replaces_the_address_collection(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+
+    response = client.patch(
+        f"{BASE}/{contact_id}",
+        json={"addresses": [{"type": "Home", "address": "New home"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["addresses"] == [
+        {
+            "id": response.json()["addresses"][0]["id"],
+            "type": "Home",
+            "address": "New home",
+            "city": None,
+            "state": None,
+            "postal_code": None,
+            "country": None,
+        }
+    ]
+
+
+def test_address_type_and_street_are_validated(client, payload):
+    bad_type = client.post(
+        BASE,
+        json={**payload, "addresses": [{"type": "Vacation", "address": "Beach"}]},
+    )
+    missing_street = client.post(
+        BASE,
+        json={**payload, "email": "other@example.com", "addresses": [{"type": "Home"}]},
+    )
+
+    assert bad_type.status_code == 422
+    assert missing_street.status_code == 422
+
+
 def test_patch_duplicate_email_conflicts(client, payload):
     first = client.post(BASE, json=payload).json()["id"]
     client.post(BASE, json={**payload, "email": "grace@example.com"})
@@ -133,6 +196,7 @@ def test_put_replaces_contact(client, payload):
     body = response.json()
     assert body["full_name"] == "Grace Hopper"
     assert body["company"] is None  # omitted fields are cleared by PUT
+    assert body["addresses"] == []
 
 
 def test_put_missing_contact_returns_404(client):
@@ -255,6 +319,53 @@ def test_startup_tolerates_a_racing_add_column(client):
         _add_missing_columns()
 
     assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}
+
+
+def test_put_replaces_the_whole_address_set(client, payload):
+    created = client.post(BASE, json=payload).json()
+    old_ids = {item["id"] for item in created["addresses"]}
+    response = client.put(
+        f"{BASE}/{created['id']}",
+        json={
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "email": "ada@example.com",
+            "addresses": [{"type": "Other", "address": "Turin"}],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()["addresses"]
+    assert [item["type"] for item in body] == ["Other"]
+    assert old_ids.isdisjoint({item["id"] for item in body})
+
+
+def test_patch_omitting_addresses_preserves_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert response.status_code == 200
+    assert len(response.json()["addresses"]) == 1
+
+
+def test_patch_with_empty_list_clears_addresses(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"addresses": []})
+    assert response.status_code == 200
+    assert response.json()["addresses"] == []
+
+
+def test_deleting_a_contact_cascades_to_its_addresses(client, payload):
+    from sqlalchemy import func, select
+
+    from app.database import SessionLocal
+    from app.models import Address
+
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    with SessionLocal() as db:
+        assert db.execute(select(func.count()).select_from(Address)).scalar_one() == 1
+
+    assert client.delete(f"{BASE}/{contact_id}").status_code == 204
+    with SessionLocal() as db:
+        assert db.execute(select(func.count()).select_from(Address)).scalar_one() == 0
 
 
 def test_is_duplicate_column_uses_postgres_sqlstate_not_generic_already_exists():

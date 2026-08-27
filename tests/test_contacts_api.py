@@ -1,5 +1,7 @@
 import base64
 
+from app.schemas import PHOTO_MAX_BYTES
+
 BASE = "/api/v1/contacts"
 
 TINY_PNG = (
@@ -176,8 +178,30 @@ def test_photo_rejects_malformed_base64(client, payload):
 
 
 def test_photo_rejects_oversized_image(client, payload):
-    oversized = "data:image/png;base64," + base64.b64encode(b"\x00" * (2 * 1024 * 1024 + 1)).decode()
+    oversized = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * PHOTO_MAX_BYTES).decode()
     assert client.post(BASE, json={**payload, "photo": oversized}).status_code == 422
+
+
+def test_photo_rejects_an_empty_payload(client, payload):
+    assert client.post(BASE, json={**payload, "photo": "data:image/png;base64,"}).status_code == 422
+
+
+def test_photo_rejects_base64_that_is_not_image_data(client, payload):
+    not_an_image = "data:image/png;base64," + base64.b64encode(b"hello world!").decode()
+    assert client.post(BASE, json={**payload, "photo": not_an_image}).status_code == 422
+
+
+def test_photo_rejects_bytes_that_contradict_the_declared_type(client, payload):
+    png_bytes_labelled_jpeg = TINY_PNG.replace("data:image/png", "data:image/jpeg")
+    assert client.post(BASE, json={**payload, "photo": png_bytes_labelled_jpeg}).status_code == 422
+
+
+def test_photo_accepts_jpeg_and_webp(client, payload):
+    jpeg = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff" + b"\x00" * 16).decode()
+    webp = "data:image/webp;base64," + base64.b64encode(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 8).decode()
+
+    assert client.post(BASE, json={**payload, "photo": jpeg}).status_code == 201
+    assert client.post(BASE, json={**payload, "email": "b@example.com", "photo": webp}).status_code == 201
 
 
 def test_put_omitting_photo_clears_it(client, payload):
@@ -195,3 +219,19 @@ def test_patch_omitting_photo_preserves_it(client, payload):
     response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
     assert response.status_code == 200
     assert response.json()["photo"] == TINY_PNG
+
+
+def test_startup_adds_a_missing_photo_column_to_an_existing_table(client):
+    """A database written before `photo` existed must gain the column, not 500."""
+    from sqlalchemy import inspect, text
+
+    from app.database import engine, init_db
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE contacts DROP COLUMN photo"))
+    assert "photo" not in {c["name"] for c in inspect(engine).get_columns("contacts")}
+
+    init_db()
+
+    assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}
+    assert client.post(BASE, json={"first_name": "A", "last_name": "B", "email": "up@example.com"}).status_code == 201

@@ -13,21 +13,39 @@ from pydantic import (
     field_validator,
 )
 
-PHOTO_MAX_BYTES = 2 * 1024 * 1024
+# Avatar-sized, not document-sized: list responses carry photos so the contacts
+# table can render avatars, so the per-photo cap bounds a whole page's payload.
+PHOTO_MAX_BYTES = 512 * 1024
+# Reject on encoded length before decoding, so an oversized payload never gets allocated.
+PHOTO_MAX_ENCODED_CHARS = (PHOTO_MAX_BYTES + 2) // 3 * 4
 _PHOTO_PREFIX = re.compile(r"^data:image/(png|jpeg|webp);base64,")
+
+# Magic bytes, so a payload that merely decodes cannot pose as an image.
+_PHOTO_SIGNATURES = {
+    "png": (lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),),
+    "jpeg": (lambda data: data.startswith(b"\xff\xd8\xff"),),
+    "webp": (lambda data: data[:4] == b"RIFF" and data[8:12] == b"WEBP",),
+}
 
 
 def _validate_photo(value: str | None) -> str | None:
     if value is None:
         return None
-    if not _PHOTO_PREFIX.match(value):
+    match = _PHOTO_PREFIX.match(value)
+    if not match:
         raise ValueError("photo must be a data URL like data:image/png;base64,<data>")
+    encoded = value[match.end() :]
+    if len(encoded) > PHOTO_MAX_ENCODED_CHARS:
+        raise ValueError("photo must be 512 KB or smaller once decoded")
     try:
-        decoded = base64.b64decode(value.split(",", 1)[1], validate=True)
+        decoded = base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError) as exc:
         raise ValueError("photo is not valid base64") from exc
     if len(decoded) > PHOTO_MAX_BYTES:
-        raise ValueError("photo must be 2 MB or smaller once decoded")
+        raise ValueError("photo must be 512 KB or smaller once decoded")
+    subtype = match.group(1)
+    if not any(check(decoded) for check in _PHOTO_SIGNATURES[subtype]):
+        raise ValueError(f"photo is not valid {subtype} image data")
     return value
 
 
@@ -35,7 +53,9 @@ PhotoDataUrl = Annotated[str | None, AfterValidator(_validate_photo)]
 
 PHOTO_DESCRIPTION = (
     "Profile photo as a base64 data URL (`image/png`, `image/jpeg`, or `image/webp`), "
-    "max 2 MB decoded. Null shows the initials avatar."
+    "max 512 KB decoded, and the bytes must really be that format. Returned by the "
+    "list endpoint too, so the contacts table can render avatars. "
+    "Null shows the initials avatar."
 )
 PHOTO_EXAMPLE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB..."
 

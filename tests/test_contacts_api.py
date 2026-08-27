@@ -235,3 +235,38 @@ def test_startup_adds_a_missing_photo_column_to_an_existing_table(client):
 
     assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}
     assert client.post(BASE, json={"first_name": "A", "last_name": "B", "email": "up@example.com"}).status_code == 201
+
+
+def test_startup_tolerates_a_racing_add_column(client):
+    """Another worker may add the column after inspect; that must not abort startup."""
+    from unittest.mock import patch
+
+    from sqlalchemy import inspect
+    from sqlalchemy.engine.reflection import Inspector
+
+    from app.database import _add_missing_columns, engine
+
+    real_get_columns = Inspector.get_columns
+
+    def omit_photo(self, table_name, *args, **kwargs):
+        return [c for c in real_get_columns(self, table_name, *args, **kwargs) if c["name"] != "photo"]
+
+    with patch.object(Inspector, "get_columns", omit_photo):
+        _add_missing_columns()
+
+    assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}
+
+
+def test_is_duplicate_column_uses_postgres_sqlstate_not_generic_already_exists():
+    from types import SimpleNamespace
+
+    from app.database import _is_duplicate_column
+
+    class Wrapped:
+        def __init__(self, orig):
+            self.orig = orig
+
+    assert _is_duplicate_column(Wrapped(SimpleNamespace(sqlstate="42701", pgcode="42701")))
+    assert not _is_duplicate_column(Wrapped(SimpleNamespace(sqlstate="42P07", pgcode="42P07")))
+    assert _is_duplicate_column(Wrapped(Exception("duplicate column name: photo")))
+    assert not _is_duplicate_column(Wrapped(Exception('relation "contacts" already exists')))

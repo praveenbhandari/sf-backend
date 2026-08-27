@@ -235,3 +235,23 @@ def test_startup_adds_a_missing_photo_column_to_an_existing_table(client):
 
     assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}
     assert client.post(BASE, json={"first_name": "A", "last_name": "B", "email": "up@example.com"}).status_code == 201
+
+
+def test_startup_tolerates_a_racing_add_column(client):
+    """Another worker may add the column after inspect; that must not abort startup."""
+    from unittest.mock import patch
+
+    from sqlalchemy import inspect
+    from sqlalchemy.engine.reflection import Inspector
+
+    from app.database import _add_missing_columns, engine
+
+    real_get_columns = Inspector.get_columns
+
+    def omit_photo(self, table_name, *args, **kwargs):
+        return [c for c in real_get_columns(self, table_name, *args, **kwargs) if c["name"] != "photo"]
+
+    with patch.object(Inspector, "get_columns", omit_photo):
+        _add_missing_columns()
+
+    assert "photo" in {c["name"] for c in inspect(engine).get_columns("contacts")}

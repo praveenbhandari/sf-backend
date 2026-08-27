@@ -2,6 +2,7 @@ from collections.abc import Generator
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -70,7 +71,22 @@ def _add_missing_columns() -> None:
                 if column.name in existing or not column.nullable:
                     continue
                 type_sql = column.type.compile(engine.dialect)
-                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {type_sql}'))
+                # A sibling worker can add the column between inspect and ALTER.
+                # Use a savepoint so a duplicate-column error does not abort
+                # this transaction (PostgreSQL would otherwise fail startup).
+                try:
+                    with connection.begin_nested():
+                        connection.execute(
+                            text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {type_sql}')
+                        )
+                except (OperationalError, ProgrammingError) as exc:
+                    if not _is_duplicate_column(exc):
+                        raise
+
+
+def _is_duplicate_column(exc: BaseException) -> bool:
+    message = str(getattr(exc, "orig", None) or exc).lower()
+    return "duplicate column" in message or "already exists" in message
 
 
 def get_db() -> Generator[Session, None, None]:

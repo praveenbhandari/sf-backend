@@ -1,4 +1,11 @@
+import base64
+
 BASE = "/api/v1/contacts"
+
+TINY_PNG = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 
 def test_health(client):
@@ -144,3 +151,47 @@ def test_delete_contact(client, payload):
 def test_root_lists_entrypoints(client):
     body = client.get("/").json()
     assert body["contacts"] == BASE
+
+
+def test_create_with_photo_echoes_it_back(client, payload):
+    response = client.post(BASE, json={**payload, "photo": TINY_PNG})
+    assert response.status_code == 201
+    assert response.json()["photo"] == TINY_PNG
+
+
+def test_create_without_photo_defaults_to_null(client, payload):
+    response = client.post(BASE, json=payload)
+    assert response.status_code == 201
+    assert response.json()["photo"] is None
+
+
+def test_photo_rejects_unsupported_image_type(client, payload):
+    gif = TINY_PNG.replace("data:image/png", "data:image/gif")
+    assert client.post(BASE, json={**payload, "photo": gif}).status_code == 422
+
+
+def test_photo_rejects_malformed_base64(client, payload):
+    bad = "data:image/png;base64,this is not base64!!!"
+    assert client.post(BASE, json={**payload, "photo": bad}).status_code == 422
+
+
+def test_photo_rejects_oversized_image(client, payload):
+    oversized = "data:image/png;base64," + base64.b64encode(b"\x00" * (2 * 1024 * 1024 + 1)).decode()
+    assert client.post(BASE, json={**payload, "photo": oversized}).status_code == 422
+
+
+def test_put_omitting_photo_clears_it(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": TINY_PNG}).json()["id"]
+    response = client.put(
+        f"{BASE}/{contact_id}",
+        json={"first_name": "Ada", "last_name": "Lovelace", "email": "ada@example.com"},
+    )
+    assert response.status_code == 200
+    assert response.json()["photo"] is None
+
+
+def test_patch_omitting_photo_preserves_it(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": TINY_PNG}).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert response.status_code == 200
+    assert response.json()["photo"] == TINY_PNG

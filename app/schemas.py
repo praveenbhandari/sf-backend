@@ -1,6 +1,43 @@
+import base64
+import re
 from datetime import datetime, timezone
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+    field_validator,
+)
+
+PHOTO_MAX_BYTES = 2 * 1024 * 1024
+_PHOTO_PREFIX = re.compile(r"^data:image/(png|jpeg|webp);base64,")
+
+
+def _validate_photo(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not _PHOTO_PREFIX.match(value):
+        raise ValueError("photo must be a data URL like data:image/png;base64,<data>")
+    try:
+        decoded = base64.b64decode(value.split(",", 1)[1], validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("photo is not valid base64") from exc
+    if len(decoded) > PHOTO_MAX_BYTES:
+        raise ValueError("photo must be 2 MB or smaller once decoded")
+    return value
+
+
+PhotoDataUrl = Annotated[str | None, AfterValidator(_validate_photo)]
+
+PHOTO_DESCRIPTION = (
+    "Profile photo as a base64 data URL (`image/png`, `image/jpeg`, or `image/webp`), "
+    "max 2 MB decoded. Null shows the initials avatar."
+)
+PHOTO_EXAMPLE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB..."
 
 
 class ContactBase(BaseModel):
@@ -69,6 +106,7 @@ class ContactBase(BaseModel):
         description="Free-form notes about the contact. No length limit.",
         examples=["Met at the SF hackathon."],
     )
+    photo: PhotoDataUrl = Field(default=None, description=PHOTO_DESCRIPTION, examples=[PHOTO_EXAMPLE])
 
 
 _FULL_EXAMPLE = {
@@ -134,6 +172,7 @@ class ContactUpdate(BaseModel):
     postal_code: str | None = Field(default=None, max_length=20, description="New postal code.")
     country: str | None = Field(default=None, max_length=120, description="New country.")
     notes: str | None = Field(default=None, description="New notes; replaces the existing text.")
+    photo: PhotoDataUrl = Field(default=None, description="New profile photo. " + PHOTO_DESCRIPTION)
 
 
 class ContactRead(ContactBase):

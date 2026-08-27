@@ -91,20 +91,22 @@ def _fold(line: str) -> str:
     if len(data) <= _FOLD_OCTETS:
         return line
     chunks: list[str] = []
+    offset = 0
     first = True
-    while data:
+    length = len(data)
+    while offset < length:
         limit = _FOLD_OCTETS if first else _FOLD_OCTETS - 1
-        size = min(limit, len(data))
+        size = min(limit, length - offset)
         while size > 0:
             try:
-                text = data[:size].decode("utf-8")
+                text = data[offset : offset + size].decode("utf-8")
                 break
             except UnicodeDecodeError:
                 size -= 1
         else:  # pragma: no cover - defensive; input is valid UTF-8
             size = 1
-            text = data[:size].decode("utf-8", errors="replace")
+            text = data[offset : offset + size].decode("utf-8", errors="replace")
         chunks.append(text if first else f" {text}")
-        data = data[size:]
+        offset += size
         first = False
     return "\r\n".join(chunks)

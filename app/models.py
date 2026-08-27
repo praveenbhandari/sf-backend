@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -23,11 +23,8 @@ class Contact(Base):
     company: Mapped[str | None] = mapped_column(String(200))
     job_title: Mapped[str | None] = mapped_column(String(200))
 
-    address: Mapped[str | None] = mapped_column(String(300))
-    city: Mapped[str | None] = mapped_column(String(120))
-    state: Mapped[str | None] = mapped_column(String(120))
-    postal_code: Mapped[str | None] = mapped_column(String(20))
-    country: Mapped[str | None] = mapped_column(String(120))
+    # base64 data URL; Text because an image runs past any sane String cap.
+    photo: Mapped[str | None] = mapped_column(Text)
 
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -42,9 +39,43 @@ class Contact(Base):
         nullable=False,
     )
 
+    # delete-orphan is what makes PUT replace the whole set rather than orphan rows.
+    addresses: Mapped[list["Address"]] = relationship(
+        back_populates="contact",
+        cascade="all, delete-orphan",
+        order_by="Address.id",
+    )
+
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Contact id={self.id} email={self.email!r}>"
+
+
+class Address(Base):
+    """One postal address belonging to a contact, keyed by `contact_id`."""
+
+    __tablename__ = "addresses"
+    __table_args__ = (
+        CheckConstraint("type IN ('Home', 'Work', 'Other')", name="ck_addresses_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    type: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    street: Mapped[str | None] = mapped_column(String(300))
+    city: Mapped[str | None] = mapped_column(String(120))
+    state: Mapped[str | None] = mapped_column(String(120))
+    postal_code: Mapped[str | None] = mapped_column(String(20))
+    country: Mapped[str | None] = mapped_column(String(120))
+
+    contact: Mapped["Contact"] = relationship(back_populates="addresses")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Address id={self.id} contact_id={self.contact_id} type={self.type!r}>"

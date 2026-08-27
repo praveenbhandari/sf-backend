@@ -84,9 +84,18 @@ def _add_missing_columns() -> None:
                         raise
 
 
+# PostgreSQL `duplicate_column` — see https://www.postgresql.org/docs/current/errcodes-appendix.html
+_PG_DUPLICATE_COLUMN = "42701"
+
+
 def _is_duplicate_column(exc: BaseException) -> bool:
-    message = str(getattr(exc, "orig", None) or exc).lower()
-    return "duplicate column" in message or "already exists" in message
+    """True only for a racing ADD COLUMN, not for other 'already exists' errors."""
+    orig = getattr(exc, "orig", None) or exc
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate == _PG_DUPLICATE_COLUMN:
+        return True
+    # SQLite has no SQLSTATE; its OperationalError text is the dialect's contract.
+    return "duplicate column name" in str(orig).lower()
 
 
 def get_db() -> Generator[Session, None, None]:
